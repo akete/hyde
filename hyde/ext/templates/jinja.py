@@ -89,8 +89,8 @@ def urldecode(ctx, url):
 def date_format(ctx, dt, fmt=None):
     if not dt:
         dt = datetime.now()
-    if not isinstance(dt, datetime) or \
-            not isinstance(dt, date):
+    if not (isinstance(dt, datetime) or \
+            isinstance(dt, date)):
         logger.error("Date format called on a non date object")
         return dt
 
@@ -99,7 +99,7 @@ def date_format(ctx, dt, fmt=None):
         global_format = ctx.resolve('dateformat')
         if not isinstance(global_format, Undefined):
             format = global_format
-    return dt.strftime(format)
+    return dt.strftime(format) if PY3 else dt.strftime(format).decode('utf8')
 
 
 def islice(iterable, start=0, stop=3, step=1):
