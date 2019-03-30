@@ -25,8 +25,8 @@ logger = getLoggerWithNullHandler('hyde.ext.publishers.pyfs')
 
 try:
     from fs.osfs import OSFS
-    from fs.path import pathjoin
-    from fs.opener import fsopendir
+    from fs.path import join as pathjoin
+    from fs import open_fs
 except ImportError:
     logger.error("The PyFS publisher requires PyFilesystem v0.4 or later.")
     logger.error("`pip install -U fs` to get it.")
@@ -43,7 +43,7 @@ class PyFS(Publisher):
         if self.check_etag and not isinstance(self.check_etag, basestring):
             raise ValueError("check_etag must name the etag algorithm")
         self.prompt_for_credentials()
-        self.fs = fsopendir(self.url)
+        self.fs = open_fs(self.url)
 
     def prompt_for_credentials(self):
         credentials = {}
@@ -58,40 +58,43 @@ class PyFS(Publisher):
     def publish(self):
         super(PyFS, self).publish()
         deploy_fs = OSFS(self.site.config.deploy_root_path.path)
-        for (dirnm, local_filenms) in deploy_fs.walk():
+        for step in deploy_fs.walk():
+            dirnm = step.path
+            local_filenms = [f.name for f in step.files]
             logger.info("Making directory: %s", dirnm)
-            self.fs.makedir(dirnm, allow_recreate=True)
-            remote_fileinfos = self.fs.listdirinfo(dirnm, files_only=True)
+            self.fs.makedir(dirnm, recreate=True)
+            remote_fileinfos = list(self.fs.filterdir(dirnm, exclude_dirs=['*'], namespaces=['basic', 'details']))
             #  Process each local file, to see if it needs updating.
             for filenm in local_filenms:
                 filepath = pathjoin(dirnm, filenm)
                 #  Try to find an existing remote file, to compare metadata.
-                for (nm, info) in remote_fileinfos:
-                    if nm == filenm:
+                for info in remote_fileinfos:
+                    if info.name == filenm:
                         break
                 else:
-                    info = {}
+                    info = None
                 #  Skip it if the etags match
-                if self.check_etag and "etag" in info:
-                    with deploy_fs.open(filepath, "rb") as f:
-                        local_etag = self._calculate_etag(f)
-                    if info["etag"] == local_etag:
-                        logger.info("Skipping file [etag]: %s", filepath)
-                        continue
+                # if self.check_etag and "etag" in info:
+                #    with deploy_fs.open(filepath, "rb") as f:
+                #        local_etag = self._calculate_etag(f)
+                #    if info["etag"] == local_etag:
+                #        logger.info("Skipping file [etag]: %s", filepath)
+                #        continue
                 #  Skip it if the mtime is more recent remotely.
-                if self.check_mtime and "modified_time" in info:
-                    local_mtime = deploy_fs.getinfo(filepath)["modified_time"]
-                    if info["modified_time"] > local_mtime:
+                if info and self.check_mtime:
+                    linfo = deploy_fs.getinfo(filepath, namespaces=['basic', 'details'])
+                    local_mtime = linfo.modified
+                    if info.modified > local_mtime:
                         logger.info("Skipping file [mtime]: %s", filepath)
                         continue
                 #  Upload it to the remote filesystem.
                 logger.info("Uploading file: %s", filepath)
                 with deploy_fs.open(filepath, "rb") as f:
-                    self.fs.setcontents(filepath, f)
+                    self.fs.writefile(filepath, f)
             #  Process each remote file, to see if it needs deleting.
-            for (filenm, info) in remote_fileinfos:
-                filepath = pathjoin(dirnm, filenm)
-                if filenm not in local_filenms:
+            for info in remote_fileinfos:
+                filepath = pathjoin(dirnm, info.name)
+                if filepath not in local_filenms:
                     logger.info("Removing file: %s", filepath)
                     self.fs.remove(filepath)
 
